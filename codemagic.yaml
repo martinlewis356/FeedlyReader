@@ -6,7 +6,7 @@ workflows:
       groups:
         - app_config
       # Xcode version for build
-      xcode: 16.4.0
+      xcode: 16.3
       
       # CocoaPods and fastlane versions
       cocoapods: default
