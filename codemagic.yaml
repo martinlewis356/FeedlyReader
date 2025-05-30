@@ -4,7 +4,7 @@ workflows:
     max_build_duration: 120
     environment:
       groups:
-        
+        - app_config
       # Xcode version for build
       xcode: 15.2.0
       
