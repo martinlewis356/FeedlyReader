@@ -4,9 +4,6 @@ workflows:
     max_build_duration: 120
     environment:
       groups:
-        # 从 Codemagic UI 中添加这些环境变量
-        # 在项目设置 -> 环境变量中配置这些值
-        - app_config # 包含所有应用配置的变量组
         
       # Xcode version for build
       xcode: 15.2.0
