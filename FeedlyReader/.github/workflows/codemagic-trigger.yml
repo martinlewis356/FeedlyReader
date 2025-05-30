@@ -1,0 +1,22 @@
+name: Trigger Codemagic Build
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  trigger-codemagic:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Trigger Codemagic
+      uses: codemagic-ci-cd/github-actions/trigger-pipeline@main
+      with:
+        payload: '{"branch": "${{ github.ref }}"}'
+      env:
+        # 配置此值为您的Codemagic API密钥
+        CM_API_KEY: ${{ secrets.CODEMAGIC_API_KEY }}
+        
+        # 工作流ID 从Codemagic的"工作流设置"中获取
+        CM_WORKFLOW_ID: 1234567890abcdef12345678

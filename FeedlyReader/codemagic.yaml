@@ -1,0 +1,208 @@
+workflows:
+  ios-app:
+    name: FeedlyReader CI/CD
+    max_build_duration: 120
+    environment:
+      groups:
+        # 从 Codemagic UI 中添加这些环境变量
+        # 在项目设置 -> 环境变量中配置这些值
+        - app_config # 包含所有应用配置的变量组
+        
+      # Xcode version for build
+      xcode: 15.2.0
+      
+      # CocoaPods and fastlane versions
+      cocoapods: default
+    
+    triggering:
+      events:
+        - push
+        - pull_request
+      branch_patterns:
+        - pattern: "*"
+          include: true
+          source: true
+    
+    scripts:
+      # -----------------
+      # CI 设置阶段
+      # -----------------
+      - name: Set up environment
+        script: |
+          # 启用详细日志输出
+          set -ex
+          
+          # 检查 CocoaPods 版本
+          echo "CocoaPods version:"
+          pod --version
+          
+          # 设置项目路径变量
+          export PROJECT_PATH=FeedlyReader.xcodeproj
+          export SCHEME=FeedlyReader
+          export OUTPUT_PATH=build
+          
+          # 准备输出目录
+          mkdir -p $OUTPUT_PATH
+          
+          # 复制 GoogleService-Info.plist（如果使用Firebase）
+          # cp "./Resources/GoogleService-Info.plist" "./$SCHEME/GoogleService-Info.plist"
+          
+          # 安装 Swift packages（如果使用SPM）
+          # xcodebuild -resolvePackageDependencies -project "$PROJECT_PATH" -scheme "$SCHEME"
+      
+      # -----------------
+      # 依赖项安装阶段
+      # -----------------
+      - name: Install Pods
+        script: |
+          set -ex
+          # 使用系统级缓存加速依赖项安装
+          export POD_CACHE_DIR=/Users/builder/cache/sym/Pods
+          export GEM_CACHE_DIR=/Users/builder/cache/sym/Gems
+          
+          mkdir -p $POD_CACHE_DIR
+          mkdir -p $GEM_CACHE_DIR
+          
+          # 使用缓存安装gem包（如有需要）
+          # gem install --no-document -i $GEM_CACHE_DIR cocoapods
+          
+          # 安装Pods
+          pod install --repo-update
+      
+      # -----------------
+      # 构建阶段
+      # -----------------
+      - name: Build
+        script: |
+          set -ex
+          
+          # 增加命令行工具的日志级别（可选）
+          export FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT=120
+          
+          # 执行构建
+          xcodebuild \
+            -workspace FeedlyReader.xcworkspace \
+            -scheme $SCHEME \
+            -sdk iphoneos \
+            -configuration Debug \
+            clean build \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee "$OUTPUT_PATH/build.log"
+          
+          # 检查构建结果
+          if [ $? -ne 0 ]; then
+            echo "Build failed, check build.log for details"
+            exit 1
+          fi
+      
+      # -----------------
+      # 测试阶段（可选）
+      # -----------------
+      - name: Run tests
+        script: |
+          set -ex
+          
+          # 在模拟器上运行单元测试
+          xcodebuild test \
+            -workspace FeedlyReader.xcworkspace \
+            -scheme $SCHEME \
+            -destination "platform=iOS Simulator,name=iPhone 15 Pro,OS=latest" \
+            CODE_SIGNING_ALLOWED=NO
+      
+      # -----------------
+      # 打包分发阶段
+      # -----------------
+      - name: Archive and export IPA
+        script: |
+          set -ex
+          
+          # 获取CI构建号
+          BUILD_NUMBER=$(date +"%Y%m%d.%H%M")
+          
+          # 编译归档
+          xcodebuild archive \
+            -workspace FeedlyReader.xcworkspace \
+            -scheme $SCHEME \
+            -archivePath "$OUTPUT_PATH/$SCHEME.xcarchive" \
+            -allowProvisioningUpdates \
+            -sdk iphoneos \
+            CODE_SIGNING_ALLOWED=YES \
+            DEVELOPMENT_TEAM="$APPLE_DEVELOPER_TEAM" \
+            CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$APPLE_PROFILE_NAME" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER"
+          
+          # 导出IPA文件
+          xcodebuild -exportArchive \
+            -archivePath "$OUTPUT_PATH/$SCHEME.xcarchive" \
+            -exportOptionsPlist ./config/ExportOptions.plist \
+            -exportPath $OUTPUT_PATH \
+            -allowProvisioningUpdates
+          
+          # 验证导出的IPA文件
+          if [ ! -f "$OUTPUT_PATH/$SCHEME.ipa" ]; then
+            echo "IPA export failed!"
+            exit 1
+          fi
+      
+      # -----------------
+      # 发布阶段
+      # -----------------
+      publishing:
+        email:
+          recipients:
+            - your-email@example.com
+        scripts:
+          # 将IPA上传到App Store Connect（TestFlight）
+          - name: Publish to TestFlight
+            script: |
+              if [ "$FCI_BRANCH" == "main" ]; then
+                echo "Publishing to TestFlight..."
+                
+                # 上传到App Store Connect
+                xcrun altool --upload-app \
+                  -f "$OUTPUT_PATH/$SCHEME.ipa" \
+                  -t ios \
+                  --apiKey "$APP_STORE_CONNECT_API_KEY" \
+                  --apiIssuer "$APP_STORE_CONNECT_ISSUER_ID" \
+                  --verbose
+              fi
+          
+          # 上传到Firebase App Distribution（可选）
+          - name: Deploy to Firebase
+            script: |
+              if [ "$FCI_BRANCH" == "develop" ]; then
+                echo "Deploying to Firebase..."
+                
+                # 安装firebase-cli
+                curl -sL firebase.tools | bash
+                
+                # 部署到Firebase App Distribution
+                firebase appdistribution:distribute "$OUTPUT_PATH/$SCHEME.ipa" \
+                  --app "$FIREBASE_APP_ID" \
+                  --groups "testers" \
+                  --token "$FIREBASE_TOKEN"
+              fi
+          
+          # 上传构建日志和元数据
+          - name: Archive build artifacts
+            script: |
+              # 保存构建详细信息
+              echo "Build Number: $BUILD_NUMBER" > $OUTPUT_PATH/build_info.txt
+              echo "Commit: $FCI_COMMIT" >> $OUTPUT_PATH/build_info.txt
+              echo "Branch: $FCI_BRANCH" >> $OUTPUT_PATH/build_info.txt
+              date >> $OUTPUT_PATH/build_info.txt
+              
+              # 收集系统信息
+              sw_vers > $OUTPUT_PATH/system_info.txt
+              xcodebuild -version >> $OUTPUT_PATH/system_info.txt
+              
+              # 找到并复制app dSYMs用于崩溃报告
+              find "$OUTPUT_PATH/$SCHEME.xcarchive" -name "*.dSYM" -exec cp -R {} $OUTPUT_PATH \;
+              
+              # 压缩所有工件
+              cd $OUTPUT_PATH
+              zip -r artifacts.zip .
+            
+            artifacts:
+              - $OUTPUT_PATH/artifacts.zip
